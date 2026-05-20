@@ -1,28 +1,22 @@
-#Imports all neccessary libraries for the code to run
-
 import uproot
 import tkinter as tk
 from tkinter import filedialog
+import pandas as pd  
 
-# This prompts the user to select a ROOT file
+# Select the ROOT file
 root = tk.Tk()
 root.withdraw()
-
 file_path = filedialog.askopenfilename(title="Select a ROOT file")
 
-#This defines the input variable as the file path of the selected ROOT file
-input = file_path
+# Open and extract all data directly into a Pandas DataFrame
+with uproot.open(file_path) as file:
+    tree = file["Btree/DecayTree"]
+    
+    # Leaving the first argument empty makes uproot read ALL branches
+    df = tree.arrays(library="pd")
 
-#This opens the ROOT file using uproot
-file = uproot.open(input)
+# Save to Parquet format instantly
+output_filename = "root_data_output.parquet"
+df.to_parquet(output_filename, compression="snappy")
 
-#This is accessing the tree
-tree = file["Btree/DecayTree"]
-
-#Converts specific branches of the trees into a dictionary of NumPy arrays
-data = tree.arrays(["Bplus_ENDVERTEX_X"], library="np")
-
-#Access the NumPy arrays
-Bplus_ENDVERTEX_x = data["Bplus_ENDVERTEX_X"]
-
-print(Bplus_ENDVERTEX_x)
+print(f"Successfully saved {len(df)} rows and {len(df.columns)} columns to {output_filename}")
