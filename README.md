@@ -7,9 +7,9 @@ The required python libraries are:
    |---------|---------|
    | **pandas** | Data manipulation and analysis |
    | **uproot** | Reading ROOT files (CERN data format) |
-   | **duckdb** | SQL-based data querying |
-   | **numpy** | Numerical computing |
-   | **matplotlib** | Data visualization |
+   | **duckdb** | SQL-based to read the .parquet data |
+   | **numpy** | Numerical data inside the .parquet data |
+   | **matplotlib** | Data graphing |
    | **tkinter** | File selection GUI |
 
 **Resources**
@@ -22,6 +22,8 @@ The required python libraries are:
    B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 -- 2017 Magnet Down
    B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 -- 2017 Magnet Up
 
-**Author**: [@nicolasxc389]
+**Author**: 
+[@nicolasxc389]
+
 (https://github.com/nicolasxc389)
    
