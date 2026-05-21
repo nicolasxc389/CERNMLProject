@@ -19,9 +19,9 @@ The required python libraries are:
 
 **Data used**
 
-   B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 -- 2017 Magnet Down
+   - B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 -- 2017 Magnet Down
    
-   B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 -- 2017 Magnet Up
+   - B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 -- 2017 Magnet Up
 
 **Author**: 
 [@nicolasxc389]
