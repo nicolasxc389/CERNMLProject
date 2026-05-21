@@ -1,4 +1,6 @@
 import duckdb
+import matplotlib
+import matplotlib.pyplot as plt
 
 # Connect to the file
 con = duckdb.connect()
@@ -28,3 +30,43 @@ column_list = [col[0] for col in columns_with_momentum_X + columns_with_momentum
 
 print("Found momentum-related columns:")
 print(column_list)
+print("\n\nPlease input for what proton without _PX, _PY, and _PZ you would like to use for momentum calculation:")
+particle = input()
+
+# Configure the system to use matplotlib
+matplotlib.use('Agg')
+
+# Query to see the relevant columns for the chosen particle
+query = f"""
+    SELECT 
+        {particle}_PX AS px, 
+        {particle}_PY AS py, 
+        {particle}_PZ AS pz,
+        SQRT({particle}_PX^2 + {particle}_PY^2 + {particle}_PZ^2) AS p_tot
+    FROM 'root_data_output.parquet'
+    WHERE {particle}_PX IS NOT NULL
+"""
+# Extract the data from the query into a NumPy structured array
+try:
+    data = con.execute(query).fetchnumpy()
+
+    # Set up a 1-panel plotting grid (1 row, 4 columns)
+    fig, ax = plt.subplots(1, 1, figsize=(24, 5))
+    bins = 100
+
+    # Panel 1: Total Combined Momentum Magnitude (P)
+    ax.hist(data['p_tot'] / 1000, bins=bins, histtype='step', color='darkorange', lw=2)
+    ax.set_title(f"${particle}$ Total Momentum ($P$)")
+    ax.set_xlabel("Total Momentum [GeV/c]")
+    ax.set_ylabel("Counts")
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0,500)
+
+    plt.tight_layout()
+    plt.show()
+
+    # Saves the file
+    plt.savefig(f"{particle}_momentum_distributions.png", dpi=300)
+
+except Exception as e:
+    print(f"An error occurred while processing the data, you either put it wrong or:{e}")
