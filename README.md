@@ -16,7 +16,11 @@ The required python libraries are:
 
    https://opendata.cern.ch/record/93949
    https://opendata.cern.ch/record/93948
+**Pipeline**
+   MUST BE FOLLOWED IN ORDER
 
+   parquet.py -> momentum.py or pseudorapidity.py
+   
 **Data used**
 
    - B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 -- 2017 Magnet Down
