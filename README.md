@@ -6,12 +6,14 @@
 The required python libraries are:
    | Library | Purpose |
    |---------|---------|
-   | **pandas** | Data manipulation and analysis |
+   | **pandas** | Data manipulation, framing, and analysis |
    | **uproot** | Reading ROOT files (CERN data format) |
    | **duckdb** | SQL-based to read the .parquet data |
    | **numpy** | Numerical data inside the .parquet data |
    | **matplotlib** | Data graphing |
    | **tkinter** | File selection GUI |
+   | **scikit-learn** | Machine Learning |
+   | **xgboost** | Decision Trees|
 
 **Pipeline**
 
@@ -20,6 +22,10 @@ The required python libraries are:
       └──➔ momentum.py
       │
       └──➔ pseudorapidity.py
+      │
+      └──➔ invariantmass.py
+      │
+      └──➔ boostedtrees.py
 
 
 **Resources**
