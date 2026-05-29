@@ -52,5 +52,30 @@ query = f"""
         AND B_PY IS NOT NULL
         AND B_PZ IS NOT NULL
 """
-# Begin Decision Tree model
+# Execute the query and return the data from the .parquet file into a pandas dataframe
+df_master = con.execute(query).df()
+
+# ===================================
+# Decision Tree Dataframe preparation
+# ===================================
+
+#Selects the events where the B Meson invariant mass is within the signal region (5.230 < m_B < 5.330) and the background region (m_B < 5.100 or m_B > 5.400)
+signal_mask = (df_master['mass_B'] > 5.230) & (df_master['mass_B'] < 5.330)
+#Select the events where the B Meson invariant mass is within the background region (m_B < 5.100 or m_B > 5.400)
+bkg_mask = (df_master['mass_B'] < 5.100) | (df_master['mass_B'] > 5.400)
+
+# Creates a panda dataframe for the signal events
+df_signal = df_master[signal_mask].copy()
+# Creates a panda dataframe for the background events
+df_bkg = df_master[bkg_mask].copy()
+
+df_signal['label'] = 1  # Simulated Signal / Peak
+df_bkg['label'] = 0     # Experimental Background / Sidebands
+
+# Combine the records together into a master pandas dataframe for training
+df_train_ready = pd.concat([df_signal, df_bkg], ignore_index=True)
+
+# =======================================
+# Matrix Seperation & Overtraining Split
+# =======================================
 
