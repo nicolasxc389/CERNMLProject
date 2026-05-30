@@ -4,31 +4,37 @@ import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 import pandas as pd
+import tkinter as tk
+from tkinter import filedialog
 
+#Select the parquet file
+parquet = tk.Tk()
+parquet.withdraw()
+file_path = filedialog.askopenfilename(title="Select a Parquet file", filetypes =[("Parquet files", "*.parquet")])
 
 # Connect to the file
 con = duckdb.connect()
 
 # Let SQL do the filtering for columns containing 'P' or 'p'
-query_X = """
+query_X = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PX%'
 """
-query_Y = """
+query_Y = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PY%'
 """
-query_Z = """
+query_Z = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PZ%'
 """
 
-query_E = """
+query_E = f"""
     SELECT column_name
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PE%'
 """
 # Fetch the results straight into a clean Python list
@@ -51,7 +57,7 @@ matplotlib.use('Agg')
 query = f"""
     SELECT 
         SQRT(GREATEST(0, {particle}_PE^2 - ({particle}_PX^2 + {particle}_PY^2 + {particle}_PZ^2))) AS m_inv
-    FROM 'root_data_output.parquet'
+    FROM '{file_path}'
     WHERE {particle}_PX IS NOT NULL AND {particle}_PY IS NOT NULL AND {particle}_PZ IS NOT NULL AND {particle}_PE IS NOT NULL
 """
 df = con.execute(query).df()
@@ -66,7 +72,7 @@ try:
     counts, bin_edges = np.histogram(mass_array, bins=np.size(mass_array))
     peak_bin_index = np.argmax(counts)
     peak_mass_meV = (bin_edges[peak_bin_index] + bin_edges[peak_bin_index + 1]) / 2
-    
+
     # Set up a 1-panel plotting grid (1 row, 4 columns)
     fig, ax = plt.subplots(1, 1, figsize=(24, 5))
     bins = 101
@@ -88,8 +94,15 @@ try:
     # Saves the file
     plt.savefig(f"{particle}_invariant_mass.png", dpi=300)
 
+    #Save the DF to a parquet file to send to the boosted decision tree for classification
+    output_filename = f"{particle}-invariantmass.parquet"
+    df.to_parquet(output_filename, compression='snappy')
+
+
     print(f"The Average invariant mass for {particle}: {math.trunc(np.average(mass_array))} MeV/c²")
     print(f"The Peak invariant mass for {particle}: {math.trunc(peak_mass_meV)} MeV/c²")
+
+
 
 except Exception as e:
     print(f"An error occurred while processing the data: {e}")
