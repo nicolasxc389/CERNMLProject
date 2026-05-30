@@ -48,7 +48,7 @@ boostedtrees.py               ← Train/evaluate ML classifier (IN PROGRESS)
 | `parquet.py` | Convert ROOT files to Parquet via tkinter file selector | ✅ Complete |
 | `momentum.py` | Compute total momentum distributions with SQL queries | ✅ Complete |
 | `pseudorapidity.py` | Calculate η, φ, pT with statistical analysis | ✅ Complete |
-| `invariantmass.py` | Relativistic 4-vector algebra for mass reconstruction | 🔨 In Progress |
+| `invariantmass.py` | Relativistic 4-vector algebra for mass reconstruction | ✅ Complete |
 | `boostedtrees.py` | Gradient boosting classification & model evaluation | 🔨 In Progress |
 
 ---
