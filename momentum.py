@@ -1,24 +1,31 @@
 import duckdb
 import matplotlib
 import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import filedialog
+
+#Select the parquet file
+parquet = tk.Tk()
+parquet.withdraw()
+file_path = filedialog.askopenfilename(title="Select a Parquet file", filetypes =[("Parquet files", "*.parquet")])
 
 # Connect to the file
 con = duckdb.connect()
 
 # Let SQL do the filtering for columns containing 'P' or 'p'
-query_X = """
+query_X = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PX%'
 """
-query_Y = """
+query_Y = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PY%'
 """
-query_Z = """
+query_Z = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PZ%'
 """
 # Fetch the results straight into a clean Python list
@@ -39,11 +46,8 @@ matplotlib.use('Agg')
 # Query to see the relevant columns for the chosen particle
 query = f"""
     SELECT 
-        {particle}_PX AS px, 
-        {particle}_PY AS py, 
-        {particle}_PZ AS pz,
         SQRT({particle}_PX^2 + {particle}_PY^2 + {particle}_PZ^2) AS p_tot
-    FROM 'root_data_output.parquet'
+    FROM '{file_path}'
     WHERE {particle}_PX IS NOT NULL
 """
 # Extract the data from the query into a NumPy structured array
@@ -69,4 +73,4 @@ try:
     plt.savefig(f"{particle}_momentum_distributions.png", dpi=300)
 
 except Exception as e:
-    print(f"An error occurred while processing the data, you either put it wrong or:{e}")
+    print(f"An error occurred while processing the data:{e}")
