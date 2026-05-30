@@ -1,25 +1,30 @@
+import os
 import duckdb
 import numpy as np
 import matplotlib 
 import matplotlib.pyplot as plt
+import tkinter as tk
+from tkinter import filedialog
 
-# Connect to the .parquet file
-con = duckdb.connect()
+#Select the parquet file
+parquet = tk.Tk()
+parquet.withdraw()
+file_path = filedialog.askopenfilename(title="Select a Parquet file", filetypes =[("Parquet files", "*.parquet")])
 
 # Let SQL do the filtering for columns containing 'P' or 'p'
-query_X = """
+query_X = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{parquet_file}')
     WHERE column_name ILIKE '%_PX%'
 """
-query_Y = """
+query_Y = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{parquet_file}')
     WHERE column_name ILIKE '%_PY%'
 """
-query_Z = """
+query_Z = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM 'root_data_output.parquet')
+    FROM (DESCRIBE SELECT * FROM '{parquet_file}')
     WHERE column_name ILIKE '%_PZ%'
 """
 # Fetch the results straight into a clean Python list
@@ -40,14 +45,11 @@ matplotlib.use('Agg')
 # Query to calculate pseudorapidity
 query = f"""
     SELECT 
-        {particle}_PX AS px, 
-        {particle}_PY AS py, 
-        {particle}_PZ AS pz,
         SQRT({particle}_PX^2 + {particle}_PY^2 + {particle}_PZ^2) AS p_tot,
         ATANH({particle}_PZ / SQRT({particle}_PX^2 + {particle}_PY^2 + {particle}_PZ^2)) AS eta,
         ATAN2({particle}_PY, {particle}_PX) AS phi,
         SQRT({particle}_PX^2 + {particle}_PY^2) AS pt
-    FROM 'root_data_output.parquet'
+    FROM '{parquet_file}'
     WHERE {particle}_PX IS NOT NULL
         AND {particle}_PY IS NOT NULL
         AND {particle}_PZ IS NOT NULL
@@ -81,6 +83,7 @@ try:
     ax[0, 0].set_ylabel("Counts")
     ax[0, 0].grid(True, alpha=0.3)
     ax[0, 0].axvline(np.mean(eta), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(eta):.3f}")
+    ax[0, 0].set_xlim(0, 7)
     ax[0, 0].legend()
     
     # Panel 2: Transverse Momentum
