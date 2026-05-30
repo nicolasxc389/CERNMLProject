@@ -11,20 +11,22 @@ parquet = tk.Tk()
 parquet.withdraw()
 file_path = filedialog.askopenfilename(title="Select a Parquet file", filetypes =[("Parquet files", "*.parquet")])
 
+con = duckdb.connect()
+
 # Let SQL do the filtering for columns containing 'P' or 'p'
 query_X = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM '{parquet_file}')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PX%'
 """
 query_Y = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM '{parquet_file}')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PY%'
 """
 query_Z = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM '{parquet_file}')
+    FROM (DESCRIBE SELECT * FROM '{file_path}')
     WHERE column_name ILIKE '%_PZ%'
 """
 # Fetch the results straight into a clean Python list
@@ -49,7 +51,7 @@ query = f"""
         ATANH({particle}_PZ / SQRT({particle}_PX^2 + {particle}_PY^2 + {particle}_PZ^2)) AS eta,
         ATAN2({particle}_PY, {particle}_PX) AS phi,
         SQRT({particle}_PX^2 + {particle}_PY^2) AS pt
-    FROM '{parquet_file}'
+    FROM '{file_path}'
     WHERE {particle}_PX IS NOT NULL
         AND {particle}_PY IS NOT NULL
         AND {particle}_PZ IS NOT NULL
