@@ -15,40 +15,27 @@ file_path = filedialog.askopenfilename(title="Select a Parquet file", filetypes 
 # Connect to the file
 con = duckdb.connect()
 
-# Let SQL do the filtering for columns containing 'P' or 'p'
-query_X = f"""
+query_discover = f"""
     SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM '{file_path}')
-    WHERE column_name ILIKE '%_PX%'
-"""
-query_Y = f"""
-    SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM '{file_path}')
-    WHERE column_name ILIKE '%_PY%'
-"""
-query_Z = f"""
-    SELECT column_name 
-    FROM (DESCRIBE SELECT * FROM '{file_path}')
-    WHERE column_name ILIKE '%_PZ%'
+    FROM (DESCRIBE SELECT * FROM '{file_path}') 
+    WHERE column_name ILIKE '%_PX%' 
+       OR column_name ILIKE '%_PY%' 
+       OR column_name ILIKE '%_PZ%' 
+       OR column_name ILIKE '%_PE%'
 """
 
-query_E = f"""
-    SELECT column_name
-    FROM (DESCRIBE SELECT * FROM '{file_path}')
-    WHERE column_name ILIKE '%_PE%'
-"""
-# Fetch the results straight into a clean Python list
-columns_with_momentum_X = con.execute(query_X).fetchall()
-columns_with_momentum_Y = con.execute(query_Y).fetchall()
-columns_with_momentum_Z = con.execute(query_Z).fetchall()
-columns_with_energy = con.execute(query_E).fetchall()
+columns_found = [col[0] for col in con.execute(query_discover).fetchall()]
 
-column_list = [col[0] for col in columns_with_momentum_X + columns_with_momentum_Y + columns_with_momentum_Z + columns_with_energy]
+print("\nFound the following available particle prefixes:")
+# Using a set comprehension simplifies the syntax and removes duplicates automatically
+prefixes = sorted({col.split('_PX')[0].split('_PY')[0].split('_PZ')[0].split('_PE')[0] for col in columns_found})
 
-print("Found momentum-related columns:")
-print(column_list)
-print("\n\nPlease input for what particle without _PX, _PY, and _PZ you would like to use for invariant mass calculation:")
-particle = input()
+for p in prefixes:
+    print(f"  - {p}")
+
+
+particle = input('\nEnter the exact particle prefix you want to analyze: ').strip()
+
 
 # Configure the system to use matplotlib
 matplotlib.use('Agg')
