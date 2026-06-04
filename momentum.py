@@ -2,6 +2,8 @@ import duckdb
 import matplotlib
 import matplotlib.pyplot as plt
 import tkinter as tk
+import numpy as np
+import pandas as pd
 from tkinter import filedialog
 
 #Select the parquet file
@@ -44,7 +46,12 @@ query = f"""
 """
 # Extract the data from the query into a NumPy structured array
 try:
-    data = con.execute(query).fetchnumpy()
+    data = con.execute(query).df()
+
+    momentum_array = data['p_tot'].to_numpy() / 1000
+    counts, bin_edges = np.histogram(momentum_array, bins=np.size(momentum_array))
+    peak_bin_index = np.argmax(counts)
+    peak_momentum = (bin_edges[peak_bin_index] + bin_edges[peak_bin_index + 1]) / 2
 
     # Set up a 1-panel plotting grid (1 row, 4 columns)
     fig, ax = plt.subplots(1, 1, figsize=(24, 5))
@@ -53,11 +60,13 @@ try:
     # Panel 1: Total Combined Momentum Magnitude (P)
     ax.hist(data['p_tot'] / 1000, bins=bins, histtype='step', color='darkorange', lw=2)
     ax.set_title(f"${particle}$ Total Momentum ($P$)")
-    ax.set_xlabel("Total Momentum [GeV/c]")
+    ax.set_xlabel("Total Momentum [MeV/c]")
     ax.set_ylabel("Counts")
+    ax.axvline(np.mean(momentum_array), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(momentum_array):.3f} MeV/C")
+    ax.axvline(x=peak_momentum, color='blue', linestyle='--', linewidth=1.5, label=f"Peak Total Momentum: {peak_momentum:.3f} MeV/c")
+    ax.legend()
     ax.grid(True, alpha=0.3)
     ax.set_xlim(0,500)
-
     plt.tight_layout()
     plt.show()
 
