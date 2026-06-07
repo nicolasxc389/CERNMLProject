@@ -1,4 +1,4 @@
-# CERN ML Project: B Meson Decay Classification
+# High Energy Particle Collision ML Project: B Meson Decay Classification
 
 > 🚀 Machine learning pipeline for classifying B meson decay events from real CERN collision data.
 > Work in progress — code and results subject to change.
