@@ -9,11 +9,17 @@ This project applies machine learning to real particle physics data from CERN to
 
 **Status:** Core modules complete (data processing, feature engineering). ML classification & refinements in progress.
 
+---
+
 ## Data Source
 
 Real CERN B Physics dataset from [CERN OpenData](https://opendata.cern.ch/):
-- [2017 Magnet Down](https://opendata.cern.ch/record/93949)
-- [2017 Magnet Up](https://opendata.cern.ch/record/93948)
+- **Dataset 1:** [B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 — 2017 Magnet Down](https://opendata.cern.ch/record/93949)
+- **Dataset 2:** [B±→J/ψ(→μ+μ−)K±CC Ntuples 4530 — 2017 Magnet Up](https://opendata.cern.ch/record/93948)
+
+The data contains B meson decays recorded by CERN detectors, with signal events (true decay) in the invariant mass peak and background events in the sidebands.
+
+---
 
 ## Pipeline
 
@@ -35,6 +41,8 @@ parquet.py → momentum.py → pseudorapidity.py → invariantmass.py → booste
 | `angularSeparation.py` | Angular separation analysis | ✅ |
 | `resolutionSharpening.py` | XGBoost resolution regressor | 🔨 In Progress |
 
+---
+
 ## Requirements
 
 ```
@@ -43,6 +51,8 @@ matplotlib>=3.4.0, scikit-learn>=1.0.0, xgboost>=1.5.0
 ```
 
 Install: `pip install -r requirements.txt`
+
+---
 
 ## Quick Start
 
@@ -65,12 +75,41 @@ python angularSeparation.py
 python resolutionSharpening.py
 ```
 
+---
+
 ## Physics Context
 
-**B± → J/ψ(→ μ⁺μ⁻)K±** is a classic channel for CP-violation studies. Signal events form a peak in the invariant mass spectrum (~5.28 GeV); background populates the sidebands. Key observables: transverse momentum (pT), pseudorapidity (η), and reconstructed invariant masses.
+### Decay Channel: B± → J/ψ(→ μ⁺μ⁻)K±
+
+This is a classic channel for CP-violation studies at CERN. Key features:
+
+- The B meson (bottom quark) is essential for understanding matter-antimatter asymmetry
+- Muons from J/ψ decay provide clean, detectable tracks in the detector
+- Kaons complete the decay chain
+- **Signal events** form a peak in the invariant mass spectrum near **5.28 GeV**
+- **Background events** populate the sidebands
+
+### Key Observable Quantities
+
+- **Transverse Momentum (pT):** Momentum perpendicular to the beam axis
+- **Pseudorapidity (η):** Angular measurement in detector-friendly coordinates
+- **Invariant Mass:** Reconstructed rest mass from 4-vector algebra (E² - p²)
+
+---
 
 ## Notes
 
-- **Learning Project:** Focus on understanding particle physics + ML workflows
+- **Learning Project:** Focus is on understanding particle physics + ML workflows
 - **Data Size:** Original ROOT files are large (~GB); download from CERN OpenData as needed
 - **Python 3.8+** recommended
+- **Status:** Work in progress; code and results are subject to change
+
+---
+
+## References
+
+- [CERN OpenData Portal](https://opendata.cern.ch/)
+- [ROOT Data Analysis Framework](https://root.cern/)
+- [Uproot Documentation](https://uproot.readthedocs.io/)
+- [DuckDB Documentation](https://duckdb.org/)
+- [Particle Data Group (PDG)](https://pdg.lbl.gov/)
