@@ -1,3 +1,5 @@
+# Define and import all of the required libraries
+
 import sys
 import math
 import tkinter as tk
@@ -15,9 +17,8 @@ from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from scipy.optimize import curve_fit
 
-# ==========================================
-# 1. FILE SELECTION & DATABASE CONNECTION
-# ==========================================
+
+# .parquet selection (better efficiency) 
 print("Opening file dialog... Please select your Parquet file.")
 root = tk.Tk()
 root.withdraw()
@@ -25,16 +26,12 @@ file_path = filedialog.askopenfilename(
     title="Select a Parquet file", 
     filetypes=[("Parquet files", "*.parquet")]
 )
-
 if not file_path:
     print("No file selected. Exiting.")
     sys.exit()
-
 con = duckdb.connect()
 
-# ==========================================
-# 2. DATA EXTRACTION (THE WHOLE PICTURE)
-# ==========================================
+# 2. Print out the decay chain topology for B+ -> J/psi(mu+ mu-) K+
 print("\nExtracting whole decay chain topology for B+ -> J/psi(mu+ mu-) K+ ...")
 
 # This query extracts the complete decay tree topology while strictly omitting the B_M mass to prevent leakage.
@@ -65,11 +62,10 @@ query = f"""
         AND Muminus_PT IS NOT NULL;
 
 """
+# Put the query results into a Dataframe called df_master, which will be used for the rest of the analysis
 df_master = con.execute(query).df()
 
-# ==========================================
-# 3. ROBUST GAUSSIAN PEAK FINDER
-# ==========================================
+# 3. Find the Gaussian peak   
 counts, bin_edges = np.histogram(df_master['m_inv'], bins=100)
 bin_centers = 0.5 * (bin_edges[1:] + bin_edges[:-1])
 
@@ -107,9 +103,7 @@ df_bkg['label'] = 0
 
 df_train_ready = pd.concat([df_signal, df_bkg], ignore_index=True)
 
-# ==========================================
 # 4. MATRIX SEPARATION & DATA SPLITTING
-# ==========================================
 # Defining the complete feature set across the whole decay chain
 features = [
     'b_pt', 'b_p_tot', 'b_fdchi2', 'b_ipchi2',
@@ -133,9 +127,7 @@ print(f"\n--- Data Split Diagnostics ---")
 print(f"Train Size: {len(X_train)} | Test Size: {len(X_test)}")
 print(f"Class Balance (Signal Ratio): {y_train.mean():.4f}")
 
-# ==========================================
 # 5. MODEL CHALLENGER 1: BOOSTED DECISION TREE
-# ==========================================
 print("\nTraining the Boosted Decision Tree (XGBoost)...")
 bdt = xgb.XGBClassifier(
     n_estimators=150,
@@ -149,9 +141,7 @@ bdt.fit(X_train, y_train, eval_set=[(X_train, y_train), (X_test, y_test)], verbo
 bdt_train_preds = bdt.predict_proba(X_train)[:, 1]
 bdt_test_preds = bdt.predict_proba(X_test)[:, 1]
 
-# ==========================================
 # 6. MODEL CHALLENGER 2: DEEP NEURAL NETWORK
-# ==========================================
 print("Training the Deep Neural Network (PyTorch)...")
 
 # Convert pandas splits to PyTorch Tensors
@@ -212,24 +202,20 @@ with torch.no_grad():
     dnn_train_preds = dnn(X_train_t).numpy()
     dnn_test_preds = dnn(X_test_t).numpy()
 
-# ==========================================
+
 # 7. PERFORMANCE SHOWDOWN EVALUATION
-# ==========================================
 print(f"BDT Training AUC Score: {roc_auc_score(y_train, bdt_train_preds):.4f}")
 print(f"BDT Testing AUC Score:  {roc_auc_score(y_test, bdt_test_preds):.4f}")
-print("----------------------------------------------")
 print(f"DNN Training AUC Score: {roc_auc_score(y_train, dnn_train_preds):.4f}")
 print(f"DNN Testing AUC Score:  {roc_auc_score(y_test, dnn_test_preds):.4f}")
-print("==============================================")
 
 print("\n--- BDT Top Feature Importances ---")
 bdt_importances = sorted(zip(features, bdt.feature_importances_), key=lambda x: x[1], reverse=True)
 for col, imp in bdt_importances[:5]:
     print(f"  {col}: {imp:.4f}")
 
-# ==========================================
+
 # 8. VISUAL DIAGNOSTICS
-# ==========================================
 bdt_results = bdt.evals_result()
 
 plt.figure(figsize=(12, 5))
@@ -257,9 +243,8 @@ plt.savefig('model_comparison_dynamics.png', dpi=200)
 print("\nDiagnostics plot saved as 'model_comparison_dynamics.png'.")
 plt.show()
 
-# ==========================================
+
 # 9. APPLYING DNN TO REAL DATA
-# ==========================================
 print("\nApplying DNN to filter the real data...")
 
 # Scale the entire master dataset (including the peak region we masked earlier)
