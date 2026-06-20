@@ -87,8 +87,14 @@ nav_option = st.sidebar.radio(
 
 @st.cache_resource
 def get_db_connection():
-    """Create a cached DuckDB connection."""
-    return duckdb.connect(memory=True)
+    """Create a cached DuckDB connection with httpfs for remote files."""
+    con = duckdb.connect(database=":memory:")
+    # Essential for remote HTTP Parquet on Hugging Face
+    con.execute("INSTALL httpfs;")
+    con.execute("LOAD httpfs;")
+    # Optional: increase memory limit if needed
+    # con.execute("SET memory_limit='1.5GB';")
+    return con
 
 @st.cache_data
 def load_parquet_data(file_path):
@@ -101,26 +107,32 @@ def load_parquet_data(file_path):
         st.error(f"Error loading file: {e}")
         return None
 
-@st.cache_data(ttl=3600, show_spinner="Loading data...")
-def load_parquet_data_from_source(source_path):
+@st.cache_data(ttl=3600, show_spinner="Loading large CERN dataset...")
+def load_parquet_data_from_source(uploaded_file, source_path):
+    if uploaded_file is not None:
+        # ... keep your existing uploaded file logic
+    
     if not source_path:
         st.error("No data source provided.")
         return None
 
+    con = get_db_connection()
+
     try:
-        # Try direct remote read with DuckDB (best for Parquet on HF)
-        con = duckdb.connect(database=":memory:")
-        # Enable httpfs for remote files
-        con.execute("INSTALL httpfs; LOAD httpfs;")
-        
+        # For very large files: select ONLY the columns you actually need
+        # This is critical — SELECT * on 2.5GB will almost always crash
         query = f"""
-        SELECT * FROM read_parquet('{source_path}')
+        SELECT 
+            *  -- Replace with specific columns later for better performance
+        FROM read_parquet('{source_path}')
+        LIMIT 50000   -- Start with a sample while debugging
         """
         df = con.execute(query).df()
+        st.success(f"Loaded {len(df):,} rows (sampled)")
         return df
     except Exception as e:
-        st.error(f"Failed to load data: {e}")
-        st.info("Tip: For very large files, consider sampling or using column projections.")
+        st.error(f"Failed to load remote Parquet: {str(e)}")
+        st.info("💡 Tip: The file is 2.48 GB. Full load likely exceeds Streamlit Cloud memory limits.")
         return None
 
     parsed = urlparse(source_path)
