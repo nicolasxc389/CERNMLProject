@@ -15,6 +15,10 @@ import matplotlib.pyplot as plt
 import duckdb
 import os
 from pathlib import Path
+from urllib.parse import urlparse
+import requests
+import pyarrow.parquet as pq
+import tempfile
 
 # Set page config first
 st.set_page_config(
@@ -44,14 +48,36 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =====================================================================
-# SIDEBAR - FILE UPLOAD & NAVIGATION
+# SIDEBAR - DATA SOURCE & NAVIGATION
 # =====================================================================
 st.sidebar.markdown("## 📁 Data & Navigation")
-uploaded_file = st.sidebar.file_uploader(
-    "Upload Parquet file",
-    type="parquet",
-    help="Select your processed CERN B physics Parquet file"
+
+data_source = st.sidebar.selectbox(
+    "Data source",
+    ["Upload (small file)", "Local file path (when running locally)", "S3 / GCS / HTTP URL"]
 )
+
+uploaded_file = None
+file_source_path = None
+
+if data_source == "Upload (small file)":
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload Parquet file (small)",
+        type="parquet",
+        help="Use only for small demo files. Large files should be hosted externally."
+    )
+elif data_source == "Local file path (when running locally)":
+    file_source_path = st.sidebar.text_input(
+        "Local path to Parquet file",
+        placeholder="/path/to/file.parquet",
+        help="When running streamlit locally you can point to a local parquet file (no upload required)."
+    )
+else:
+    file_source_path = st.sidebar.text_input(
+        "Enter S3 / GCS / HTTP(s) URL",
+        placeholder="s3://my-bucket/data/file.parquet or https://huggingface.co/.../resolve/main/file.parquet",
+        help="For s3:// or gs:// you need credentials available in environment or config. For Hugging Face use the 'resolve' URL (replace /blob/ with /resolve/)."
+    )
 
 # Navigation tabs
 nav_option = st.sidebar.radio(
@@ -71,7 +97,7 @@ def get_db_connection():
 
 @st.cache_data
 def load_parquet_data(file_path):
-    """Load and cache parquet data."""
+    """Load and cache parquet data from a local path using DuckDB."""
     con = get_db_connection()
     try:
         df = con.execute(f"SELECT * FROM read_parquet('{file_path}')").df()
@@ -79,6 +105,112 @@ def load_parquet_data(file_path):
     except Exception as e:
         st.error(f"Error loading file: {e}")
         return None
+
+@st.cache_data
+def load_parquet_data_from_source(uploaded_file, source_path):
+    """Load parquet data from multiple supported sources.
+
+    Priority:
+    1) Browser-uploaded file (small)
+    2) Local file path (when running locally)
+    3) HTTP(S) URL (tries DuckDB direct read first, then streams to disk)
+    4) s3:// (tries DuckDB, then s3fs + pyarrow)
+    5) gs:// (tries DuckDB, then gcsfs + pyarrow)
+    """
+    con = get_db_connection()
+
+    # 1) Browser-uploaded file (small)
+    if uploaded_file is not None:
+        tmp = f"/tmp/{uploaded_file.name}"
+        try:
+            with open(tmp, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            return con.execute(f"SELECT * FROM read_parquet('{tmp}')").df()
+        except Exception as e:
+            st.error(f"Failed reading uploaded parquet: {e}")
+            return None
+
+    if not source_path:
+        st.warning("No data source provided.")
+        return None
+
+    parsed = urlparse(source_path)
+    scheme = (parsed.scheme or "").lower()
+
+    # 2) Local file path (no scheme)
+    if scheme == "" or scheme == "file":
+        local_path = parsed.path or source_path
+        if os.path.exists(local_path):
+            try:
+                return con.execute(f"SELECT * FROM read_parquet('{local_path}')").df()
+            except Exception as e:
+                st.error(f"DuckDB failed to read local parquet: {e}")
+                return None
+        else:
+            st.error(f"Local path not found: {local_path}")
+            return None
+
+    # 3) HTTP(S) - try direct DuckDB read first (works if host supports range requests)
+    if scheme in ("http", "https"):
+        try:
+            return con.execute(f"SELECT * FROM read_parquet('{source_path}')").df()
+        except Exception:
+            # Fallback: stream to a temp file and read locally (requires disk space)
+            st.info("Direct remote read failed — streaming remote file to disk (will require disk space).")
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".parquet") as tmpf:
+                    tmp_path = tmpf.name
+                    with requests.get(source_path, stream=True, timeout=60) as r:
+                        r.raise_for_status()
+                        for chunk in r.iter_content(chunk_size=1024*1024):
+                            if chunk:
+                                tmpf.write(chunk)
+                return con.execute(f"SELECT * FROM read_parquet('{tmp_path}')").df()
+            except Exception as e:
+                st.error(f"Failed streaming remote parquet: {e}")
+                return None
+
+    # 4) S3: attempt to use duckdb directly, otherwise use s3fs + pyarrow
+    if scheme == "s3":
+        try:
+            return con.execute(f"SELECT * FROM read_parquet('{source_path}')").df()
+        except Exception:
+            try:
+                import s3fs  # type: ignore
+            except Exception:
+                st.error("Missing dependency: install s3fs (pip install s3fs) to read s3:// paths")
+                return None
+            try:
+                fs = s3fs.S3FileSystem()
+                with fs.open(source_path, "rb") as f:
+                    table = pq.read_table(f)
+                    return table.to_pandas()
+            except Exception as e:
+                st.error(f"Failed to read from s3: {e}")
+                return None
+
+    # 5) GCS (gs://)
+    if scheme == "gs":
+        try:
+            return con.execute(f"SELECT * FROM read_parquet('{source_path}')").df()
+        except Exception:
+            try:
+                import gcsfs  # type: ignore
+            except Exception:
+                st.error("Missing dependency: install gcsfs (pip install gcsfs) to read gs:// paths")
+                return None
+            try:
+                fs = gcsfs.GCSFileSystem()
+                with fs.open(source_path, "rb") as f:
+                    table = pq.read_table(f)
+                    return table.to_pandas()
+            except Exception as e:
+                st.error(f"Failed to read from gs://: {e}")
+                return None
+
+    st.error(f"Unsupported scheme: {scheme}")
+    return None
+
 
 def discover_particle_prefixes(df):
     """Auto-detect particle prefixes from column names."""
@@ -88,6 +220,7 @@ def discover_particle_prefixes(df):
             prefix = col.rsplit('_', 1)[0]
             prefixes.add(prefix)
     return sorted(list(prefixes))
+
 
 def calculate_invariant_mass(df, particle_prefix):
     """Calculate invariant mass for a particle."""
@@ -106,6 +239,7 @@ def calculate_invariant_mass(df, particle_prefix):
         st.warning(f"Could not calculate invariant mass: {e}")
     return None
 
+
 def calculate_pseudorapidity(df, particle_prefix):
     """Calculate pseudorapidity (η) for a particle."""
     try:
@@ -121,6 +255,7 @@ def calculate_pseudorapidity(df, particle_prefix):
         st.warning(f"Could not calculate pseudorapidity: {e}")
     return None
 
+
 def calculate_transverse_momentum(df, particle_prefix):
     """Calculate transverse momentum (pT) for a particle."""
     try:
@@ -133,6 +268,7 @@ def calculate_transverse_momentum(df, particle_prefix):
     except Exception as e:
         st.warning(f"Could not calculate pT: {e}")
     return None
+
 
 def calculate_angular_separation(df, particle1_prefix, particle2_prefix):
     """Calculate angular separation (ΔR) between two particles."""
@@ -214,7 +350,7 @@ if nav_option == "🏠 Home":
     col1, col2 = st.columns([2, 1])
     with col1:
         st.markdown("""
-        1. **Upload a Parquet file** in the sidebar (processed CERN data)
+        1. **Select a data source** in the sidebar (for large files use HTTP/S or cloud storage URLs)
         2. **Select a dashboard view** to explore different analyses
         3. **Interact with filters** to slice and examine the data
         4. **Review metrics** to understand model performance
@@ -240,201 +376,193 @@ if nav_option == "🏠 Home":
 elif nav_option == "📊 Feature Analysis":
     st.title("📊 Feature Analysis & Distributions")
     
-    if uploaded_file is None:
-        st.warning("Please upload a Parquet file in the sidebar to begin.")
+    df = load_parquet_data_from_source(uploaded_file, file_source_path)
+    if df is None:
+        st.warning("Please provide a Parquet data source in the sidebar to begin.")
     else:
-        # Save uploaded file temporarily
-        temp_path = f"/tmp/{uploaded_file.name}"
-        with open(temp_path, 'wb') as f:
-            f.write(uploaded_file.getbuffer())
+        prefixes = discover_particle_prefixes(df)
         
-        # Load data
-        df = load_parquet_data(temp_path)
+        st.sidebar.markdown("### Feature Analysis Options")
+        analysis_type = st.sidebar.radio(
+            "Choose Analysis",
+            ["Invariant Mass", "Pseudorapidity", "Transverse Momentum", "Angular Separation"]
+        )
         
-        if df is not None:
-            prefixes = discover_particle_prefixes(df)
+        # ===== INVARIANT MASS ANALYSIS =====
+        if analysis_type == "Invariant Mass":
+            st.subheader("Invariant Mass Reconstruction")
             
-            st.sidebar.markdown("### Feature Analysis Options")
-            analysis_type = st.sidebar.radio(
-                "Choose Analysis",
-                ["Invariant Mass", "Pseudorapidity", "Transverse Momentum", "Angular Separation"]
-            )
+            particle = st.selectbox("Select Particle", prefixes)
             
-            # ===== INVARIANT MASS ANALYSIS =====
-            if analysis_type == "Invariant Mass":
-                st.subheader("Invariant Mass Reconstruction")
-                
-                particle = st.selectbox("Select Particle", prefixes)
-                
-                m_inv = calculate_invariant_mass(df, particle)
-                
-                if m_inv is not None:
-                    # Remove NaN values
-                    m_inv_clean = m_inv[~np.isnan(m_inv)]
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Mean Mass", f"{np.mean(m_inv_clean):.2f} MeV/c²")
-                    with col2:
-                        st.metric("Peak Mass", f"{m_inv_clean[np.argmax(np.histogram(m_inv_clean, bins=100)[0])]:.2f} MeV/c²")
-                    with col3:
-                        st.metric("Std Dev", f"{np.std(m_inv_clean):.2f} MeV/c²")
-                    with col4:
-                        st.metric("N Events", f"{len(m_inv_clean):,}")
-                    
-                    # Plot
-                    fig, ax = plt.subplots(figsize=(12, 5))
-                    counts, bins, _ = ax.hist(m_inv_clean, bins=100, alpha=0.7, color='darkorange', edgecolor='black')
-                    ax.axvline(np.mean(m_inv_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(m_inv_clean):.2f} MeV/c²")
-                    ax.axvline(np.median(m_inv_clean), color='blue', linestyle='--', linewidth=2, label=f"Median: {np.median(m_inv_clean):.2f} MeV/c²")
-                    ax.set_xlabel("Invariant Mass [MeV/c²]")
-                    ax.set_ylabel("Counts")
-                    ax.set_title(f"{particle} Invariant Mass Distribution")
-                    ax.legend()
-                    ax.grid(True, alpha=0.3)
-                    st.pyplot(fig)
-                    
-                    # Statistics
-                    with st.expander("📋 Detailed Statistics"):
-                        st.write(f"""
-                        - **Mean:** {np.mean(m_inv_clean):.4f} MeV/c²
-                        - **Median:** {np.median(m_inv_clean):.4f} MeV/c²
-                        - **Std Dev:** {np.std(m_inv_clean):.4f} MeV/c²
-                        - **Min:** {np.min(m_inv_clean):.4f} MeV/c²
-                        - **Max:** {np.max(m_inv_clean):.4f} MeV/c²
-                        - **25th Percentile:** {np.percentile(m_inv_clean, 25):.4f} MeV/c²
-                        - **75th Percentile:** {np.percentile(m_inv_clean, 75):.4f} MeV/c²
-                        """)
+            m_inv = calculate_invariant_mass(df, particle)
             
-            # ===== PSEUDORAPIDITY ANALYSIS =====
-            elif analysis_type == "Pseudorapidity":
-                st.subheader("Pseudorapidity (η) Analysis")
+            if m_inv is not None:
+                # Remove NaN values
+                m_inv_clean = m_inv[~np.isnan(m_inv)]
                 
-                particle = st.selectbox("Select Particle", prefixes)
-                
-                eta = calculate_pseudorapidity(df, particle)
-                pt = calculate_transverse_momentum(df, particle)
-                
-                if eta is not None and pt is not None:
-                    eta_clean = eta[~np.isnan(eta)]
-                    pt_clean = pt[~np.isnan(pt)]
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Mean η", f"{np.mean(eta_clean):.3f}")
-                    with col2:
-                        st.metric("Mean pT", f"{np.mean(pt_clean):.2f} GeV/c")
-                    with col3:
-                        st.metric("Max pT", f"{np.max(pt_clean):.2f} GeV/c")
-                    with col4:
-                        st.metric("N Events", f"{len(eta_clean):,}")
-                    
-                    # 2x2 Subplots
-                    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-                    
-                    # Pseudorapidity
-                    axes[0, 0].hist(eta_clean, bins=100, color='blue', alpha=0.7, edgecolor='black')
-                    axes[0, 0].axvline(np.mean(eta_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(eta_clean):.3f}")
-                    axes[0, 0].set_title(f"{particle} Pseudorapidity (η)")
-                    axes[0, 0].set_xlabel("η")
-                    axes[0, 0].set_ylabel("Counts")
-                    axes[0, 0].legend()
-                    axes[0, 0].grid(True, alpha=0.3)
-                    
-                    # Transverse Momentum
-                    axes[0, 1].hist(pt_clean, bins=100, color='green', alpha=0.7, edgecolor='black')
-                    axes[0, 1].axvline(np.mean(pt_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(pt_clean):.2f} GeV/c")
-                    axes[0, 1].set_title(f"{particle} Transverse Momentum (pT)")
-                    axes[0, 1].set_xlabel("pT [GeV/c]")
-                    axes[0, 1].set_ylabel("Counts")
-                    axes[0, 1].legend()
-                    axes[0, 1].grid(True, alpha=0.3)
-                    
-                    # η vs pT scatter
-                    axes[1, 0].scatter(eta_clean, pt_clean, alpha=0.3, s=5, color='darkblue')
-                    axes[1, 0].set_title(f"{particle} η vs pT Correlation")
-                    axes[1, 0].set_xlabel("η")
-                    axes[1, 0].set_ylabel("pT [GeV/c]")
-                    axes[1, 0].grid(True, alpha=0.3)
-                    
-                    # 2D Histogram
-                    h = axes[1, 1].hist2d(eta_clean, pt_clean, bins=50, cmap='YlOrRd')
-                    axes[1, 1].set_title(f"{particle} η-pT Density")
-                    axes[1, 1].set_xlabel("η")
-                    axes[1, 1].set_ylabel("pT [GeV/c]")
-                    plt.colorbar(h[3], ax=axes[1, 1])
-                    
-                    plt.tight_layout()
-                    st.pyplot(fig)
-            
-            # ===== TRANSVERSE MOMENTUM ANALYSIS =====
-            elif analysis_type == "Transverse Momentum":
-                st.subheader("Transverse Momentum (pT) Analysis")
-                
-                particle = st.selectbox("Select Particle", prefixes)
-                
-                pt = calculate_transverse_momentum(df, particle)
-                
-                if pt is not None:
-                    pt_clean = pt[~np.isnan(pt)]
-                    
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Mean pT", f"{np.mean(pt_clean):.2f} GeV/c")
-                    with col2:
-                        st.metric("Median pT", f"{np.median(pt_clean):.2f} GeV/c")
-                    with col3:
-                        st.metric("Max pT", f"{np.max(pt_clean):.2f} GeV/c")
-                    with col4:
-                        st.metric("N Events", f"{len(pt_clean):,}")
-                    
-                    fig, ax = plt.subplots(figsize=(12, 5))
-                    ax.hist(pt_clean, bins=100, alpha=0.7, color='green', edgecolor='black')
-                    ax.axvline(np.mean(pt_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(pt_clean):.2f} GeV/c")
-                    ax.set_xlabel("Transverse Momentum [GeV/c]")
-                    ax.set_ylabel("Counts")
-                    ax.set_title(f"{particle} Transverse Momentum Distribution")
-                    ax.legend()
-                    ax.grid(True, alpha=0.3)
-                    st.pyplot(fig)
-            
-            # ===== ANGULAR SEPARATION ANALYSIS =====
-            elif analysis_type == "Angular Separation":
-                st.subheader("Angular Separation (ΔR) Analysis")
-                
-                col1, col2 = st.columns(2)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    particle1 = st.selectbox("First Particle", prefixes)
+                    st.metric("Mean Mass", f"{np.mean(m_inv_clean):.2f} MeV/c²")
                 with col2:
-                    particle2 = st.selectbox("Second Particle", prefixes)
+                    st.metric("Peak Mass", f"{m_inv_clean[np.argmax(np.histogram(m_inv_clean, bins=100)[0])]:.2f} MeV/c²")
+                with col3:
+                    st.metric("Std Dev", f"{np.std(m_inv_clean):.2f} MeV/c²")
+                with col4:
+                    st.metric("N Events", f"{len(m_inv_clean):,}")
                 
-                if particle1 != particle2:
-                    dr = calculate_angular_separation(df, particle1, particle2)
+                # Plot
+                fig, ax = plt.subplots(figsize=(12, 5))
+                counts, bins, _ = ax.hist(m_inv_clean, bins=100, alpha=0.7, color='darkorange', edgecolor='black')
+                ax.axvline(np.mean(m_inv_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(m_inv_clean):.2f} MeV/c²")
+                ax.axvline(np.median(m_inv_clean), color='blue', linestyle='--', linewidth=2, label=f"Median: {np.median(m_inv_clean):.2f} MeV/c²")
+                ax.set_xlabel("Invariant Mass [MeV/c²]")
+                ax.set_ylabel("Counts")
+                ax.set_title(f"{particle} Invariant Mass Distribution")
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
+                
+                # Statistics
+                with st.expander("📋 Detailed Statistics"):
+                    st.write(f"""
+                    - **Mean:** {np.mean(m_inv_clean):.4f} MeV/c²
+                    - **Median:** {np.median(m_inv_clean):.4f} MeV/c²
+                    - **Std Dev:** {np.std(m_inv_clean):.4f} MeV/c²
+                    - **Min:** {np.min(m_inv_clean):.4f} MeV/c²
+                    - **Max:** {np.max(m_inv_clean):.4f} MeV/c²
+                    - **25th Percentile:** {np.percentile(m_inv_clean, 25):.4f} MeV/c²
+                    - **75th Percentile:** {np.percentile(m_inv_clean, 75):.4f} MeV/c²
+                    """)
+        
+        # ===== PSEUDORAPIDITY ANALYSIS =====
+        elif analysis_type == "Pseudorapidity":
+            st.subheader("Pseudorapidity (η) Analysis")
+            
+            particle = st.selectbox("Select Particle", prefixes)
+            
+            eta = calculate_pseudorapidity(df, particle)
+            pt = calculate_transverse_momentum(df, particle)
+            
+            if eta is not None and pt is not None:
+                eta_clean = eta[~np.isnan(eta)]
+                pt_clean = pt[~np.isnan(pt)]
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Mean η", f"{np.mean(eta_clean):.3f}")
+                with col2:
+                    st.metric("Mean pT", f"{np.mean(pt_clean):.2f} GeV/c")
+                with col3:
+                    st.metric("Max pT", f"{np.max(pt_clean):.2f} GeV/c")
+                with col4:
+                    st.metric("N Events", f"{len(eta_clean):,}")
+                
+                # 2x2 Subplots
+                fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+                
+                # Pseudorapidity
+                axes[0, 0].hist(eta_clean, bins=100, color='blue', alpha=0.7, edgecolor='black')
+                axes[0, 0].axvline(np.mean(eta_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(eta_clean):.3f}")
+                axes[0, 0].set_title(f"{particle} Pseudorapidity (η)")
+                axes[0, 0].set_xlabel("η")
+                axes[0, 0].set_ylabel("Counts")
+                axes[0, 0].legend()
+                axes[0, 0].grid(True, alpha=0.3)
+                
+                # Transverse Momentum
+                axes[0, 1].hist(pt_clean, bins=100, color='green', alpha=0.7, edgecolor='black')
+                axes[0, 1].axvline(np.mean(pt_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(pt_clean):.2f} GeV/c")
+                axes[0, 1].set_title(f"{particle} Transverse Momentum (pT)")
+                axes[0, 1].set_xlabel("pT [GeV/c]")
+                axes[0, 1].set_ylabel("Counts")
+                axes[0, 1].legend()
+                axes[0, 1].grid(True, alpha=0.3)
+                
+                # η vs pT scatter
+                axes[1, 0].scatter(eta_clean, pt_clean, alpha=0.3, s=5, color='darkblue')
+                axes[1, 0].set_title(f"{particle} η vs pT Correlation")
+                axes[1, 0].set_xlabel("η")
+                axes[1, 0].set_ylabel("pT [GeV/c]")
+                axes[1, 0].grid(True, alpha=0.3)
+                
+                # 2D Histogram
+                h = axes[1, 1].hist2d(eta_clean, pt_clean, bins=50, cmap='YlOrRd')
+                axes[1, 1].set_title(f"{particle} η-pT Density")
+                axes[1, 1].set_xlabel("η")
+                axes[1, 1].set_ylabel("pT [GeV/c]")
+                plt.colorbar(h[3], ax=axes[1, 1])
+                
+                plt.tight_layout()
+                st.pyplot(fig)
+        
+        # ===== TRANSVERSE MOMENTUM ANALYSIS =====
+        elif analysis_type == "Transverse Momentum":
+            st.subheader("Transverse Momentum (pT) Analysis")
+            
+            particle = st.selectbox("Select Particle", prefixes)
+            
+            pt = calculate_transverse_momentum(df, particle)
+            
+            if pt is not None:
+                pt_clean = pt[~np.isnan(pt)]
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Mean pT", f"{np.mean(pt_clean):.2f} GeV/c")
+                with col2:
+                    st.metric("Median pT", f"{np.median(pt_clean):.2f} GeV/c")
+                with col3:
+                    st.metric("Max pT", f"{np.max(pt_clean):.2f} GeV/c")
+                with col4:
+                    st.metric("N Events", f"{len(pt_clean):,}")
+                
+                fig, ax = plt.subplots(figsize=(12, 5))
+                ax.hist(pt_clean, bins=100, alpha=0.7, color='green', edgecolor='black')
+                ax.axvline(np.mean(pt_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(pt_clean):.2f} GeV/c")
+                ax.set_xlabel("Transverse Momentum [GeV/c]")
+                ax.set_ylabel("Counts")
+                ax.set_title(f"{particle} Transverse Momentum Distribution")
+                ax.legend()
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
+        
+        # ===== ANGULAR SEPARATION ANALYSIS =====
+        elif analysis_type == "Angular Separation":
+            st.subheader("Angular Separation (ΔR) Analysis")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                particle1 = st.selectbox("First Particle", prefixes)
+            with col2:
+                particle2 = st.selectbox("Second Particle", prefixes)
+            
+            if particle1 != particle2:
+                dr = calculate_angular_separation(df, particle1, particle2)
+                
+                if dr is not None:
+                    dr_clean = dr[~np.isnan(dr)]
                     
-                    if dr is not None:
-                        dr_clean = dr[~np.isnan(dr)]
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Mean ΔR", f"{np.mean(dr_clean):.3f}")
-                        with col2:
-                            st.metric("Median ΔR", f"{np.median(dr_clean):.3f}")
-                        with col3:
-                            st.metric("Max ΔR", f"{np.max(dr_clean):.3f}")
-                        with col4:
-                            st.metric("N Events", f"{len(dr_clean):,}")
-                        
-                        fig, ax = plt.subplots(figsize=(12, 5))
-                        ax.hist(dr_clean, bins=100, alpha=0.7, color='purple', edgecolor='black')
-                        ax.axvline(np.mean(dr_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(dr_clean):.3f}")
-                        ax.set_xlabel("Angular Separation (ΔR)")
-                        ax.set_ylabel("Counts")
-                        ax.set_title(f"Angular Separation between {particle1} and {particle2}")
-                        ax.legend()
-                        ax.grid(True, alpha=0.3)
-                        st.pyplot(fig)
-                else:
-                    st.error("Please select two different particles.")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Mean ΔR", f"{np.mean(dr_clean):.3f}")
+                    with col2:
+                        st.metric("Median ΔR", f"{np.median(dr_clean):.3f}")
+                    with col3:
+                        st.metric("Max ΔR", f"{np.max(dr_clean):.3f}")
+                    with col4:
+                        st.metric("N Events", f"{len(dr_clean):,}")
+                    
+                    fig, ax = plt.subplots(figsize=(12, 5))
+                    ax.hist(dr_clean, bins=100, alpha=0.7, color='purple', edgecolor='black')
+                    ax.axvline(np.mean(dr_clean), color='red', linestyle='--', linewidth=2, label=f"Mean: {np.mean(dr_clean):.3f}")
+                    ax.set_xlabel("Angular Separation (ΔR)")
+                    ax.set_ylabel("Counts")
+                    ax.set_title(f"Angular Separation between {particle1} and {particle2}")
+                    ax.legend()
+                    ax.grid(True, alpha=0.3)
+                    st.pyplot(fig)
+            else:
+                st.error("Please select two different particles.")
 
 # =====================================================================
 # PAGE: MODEL PERFORMANCE
@@ -442,51 +570,45 @@ elif nav_option == "📊 Feature Analysis":
 elif nav_option == "🤖 Model Performance":
     st.title("🤖 ML Model Performance & Diagnostics")
     
-    if uploaded_file is None:
-        st.warning("Please upload a Parquet file in the sidebar.")
+    df = load_parquet_data_from_source(uploaded_file, file_source_path)
+    if df is None:
+        st.warning("Please provide a Parquet data source in the sidebar.")
     else:
-        temp_path = f"/tmp/{uploaded_file.name}"
-        with open(temp_path, 'wb') as f:
-            f.write(uploaded_file.getbuffer())
+        st.subheader("Model Information")
         
-        df = load_parquet_data(temp_path)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.info("**XGBoost Classifier**\n- Boosted Decision Tree\n- 150 estimators\n- Max depth: 4")
+        with col2:
+            st.info("**Deep Neural Network**\n- PyTorch\n- 64→32→1 layers\n- 40 epochs")
+        with col3:
+            st.info("**Training Data**\n- Signal: B mass peak\n- Background: Sidebands\n- 70/30 train/test split")
         
-        if df is not None:
-            st.subheader("Model Information")
+        st.divider()
+        
+        # Feature selection for analysis
+        prefixes = discover_particle_prefixes(df)
+        
+        st.subheader("Feature Importance & Distribution")
+        
+        with st.expander("ℹ️ How to Interpret"):
+            st.markdown("""
+            **Feature Importance** shows which variables the XGBoost model relies on most for classification.
             
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.info("**XGBoost Classifier**\n- Boosted Decision Tree\n- 150 estimators\n- Max depth: 4")
-            with col2:
-                st.info("**Deep Neural Network**\n- PyTorch\n- 64→32→1 layers\n- 40 epochs")
-            with col3:
-                st.info("**Training Data**\n- Signal: B mass peak\n- Background: Sidebands\n- 70/30 train/test split")
-            
-            st.divider()
-            
-            # Feature selection for analysis
-            prefixes = discover_particle_prefixes(df)
-            
-            st.subheader("Feature Importance & Distribution")
-            
-            with st.expander("ℹ️ How to Interpret"):
-                st.markdown("""
-                **Feature Importance** shows which variables the XGBoost model relies on most for classification.
-                
-                **Expected High-Importance Features:**
-                - B meson kinematics (pT, momentum)
-                - J/ψ vertex quality (χ²)
-                - Kaon identification (PIDK)
-                - Muon isolation scores (IPCHI2)
-                """)
-            
-            # Display available columns
-            st.markdown("### Available Columns in Dataset")
-            col_display = st.columns(4)
-            cols = df.columns.tolist()
-            for idx, col in enumerate(cols):
-                with col_display[idx % 4]:
-                    st.code(col, language="text")
+            **Expected High-Importance Features:**
+            - B meson kinematics (pT, momentum)
+            - J/ψ vertex quality (χ²)
+            - Kaon identification (PIDK)
+            - Muon isolation scores (IPCHI2)
+            """)
+        
+        # Display available columns
+        st.markdown("### Available Columns in Dataset")
+        col_display = st.columns(4)
+        cols = df.columns.tolist()
+        for idx, col in enumerate(cols):
+            with col_display[idx % 4]:
+                st.code(col, language="text")
 
 # =====================================================================
 # PAGE: EVENT CLASSIFICATION
@@ -494,86 +616,80 @@ elif nav_option == "🤖 Model Performance":
 elif nav_option == "🎯 Event Classification":
     st.title("🎯 Signal vs. Background Classification")
     
-    if uploaded_file is None:
-        st.warning("Please upload a Parquet file in the sidebar.")
+    df = load_parquet_data_from_source(uploaded_file, file_source_path)
+    if df is None:
+        st.warning("Please provide a Parquet data source in the sidebar.")
     else:
-        temp_path = f"/tmp/{uploaded_file.name}"
-        with open(temp_path, 'wb') as f:
-            f.write(uploaded_file.getbuffer())
+        st.subheader("Classification Strategy")
         
-        df = load_parquet_data(temp_path)
-        
-        if df is not None:
-            st.subheader("Classification Strategy")
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            st.markdown("""
+            ### Peak Identification
+            **Signal Region:**
+            - ±2σ from peak
+            - Pure signal events
             
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                st.markdown("""
-                ### Peak Identification
-                **Signal Region:**
-                - ±2σ from peak
-                - Pure signal events
+            **Background Region:**
+            - ±5σ from peak
+            - Sidebands only
+            """)
+        
+        with col2:
+            prefixes = discover_particle_prefixes(df)
+            if len(prefixes) > 0:
+                particle = st.selectbox("Analyze particle for mass peak:", prefixes)
                 
-                **Background Region:**
-                - ±5σ from peak
-                - Sidebands only
-                """)
-            
-            with col2:
-                prefixes = discover_particle_prefixes(df)
-                if len(prefixes) > 0:
-                    particle = st.selectbox("Analyze particle for mass peak:", prefixes)
+                m_inv = calculate_invariant_mass(df, particle)
+                
+                if m_inv is not None:
+                    m_inv_clean = m_inv[~np.isnan(m_inv)]
                     
-                    m_inv = calculate_invariant_mass(df, particle)
+                    # Find peak
+                    counts, bin_edges = np.histogram(m_inv_clean, bins=100)
+                    peak_idx = np.argmax(counts)
+                    peak_mass = (bin_edges[peak_idx] + bin_edges[peak_idx+1]) / 2
+                    sigma = np.std(m_inv_clean) / 4.0
                     
-                    if m_inv is not None:
-                        m_inv_clean = m_inv[~np.isnan(m_inv)]
-                        
-                        # Find peak
-                        counts, bin_edges = np.histogram(m_inv_clean, bins=100)
-                        peak_idx = np.argmax(counts)
-                        peak_mass = (bin_edges[peak_idx] + bin_edges[peak_idx+1]) / 2
-                        sigma = np.std(m_inv_clean) / 4.0
-                        
-                        st.markdown(f"""
-                        ### Peak Statistics
-                        - **Peak Mass:** {peak_mass:.2f} MeV/c²
-                        - **Sigma:** {sigma:.2f} MeV/c²
-                        - **Signal Range:** [{peak_mass - 2*sigma:.2f}, {peak_mass + 2*sigma:.2f}] MeV/c²
-                        - **Background Range:** [{peak_mass - 5*sigma:.2f}, {peak_mass + 5*sigma:.2f}] MeV/c²
-                        """)
-                        
-                        # Visualization
-                        fig, ax = plt.subplots(figsize=(12, 5))
-                        ax.hist(m_inv_clean, bins=100, alpha=0.6, color='gray', label='All Events')
-                        
-                        sig_mask = (m_inv_clean > peak_mass - 2*sigma) & (m_inv_clean < peak_mass + 2*sigma)
-                        ax.hist(m_inv_clean[sig_mask], bins=50, alpha=0.8, color='green', label='Signal Region (±2σ)')
-                        
-                        ax.axvline(peak_mass, color='red', linestyle='--', linewidth=2, label='Peak')
-                        ax.axvline(peak_mass - 2*sigma, color='blue', linestyle=':', linewidth=1.5, alpha=0.7)
-                        ax.axvline(peak_mass + 2*sigma, color='blue', linestyle=':', linewidth=1.5, alpha=0.7)
-                        ax.axvline(peak_mass - 5*sigma, color='orange', linestyle=':', linewidth=1.5, alpha=0.7)
-                        ax.axvline(peak_mass + 5*sigma, color='orange', linestyle=':', linewidth=1.5, alpha=0.7)
-                        
-                        ax.set_xlabel("Invariant Mass [MeV/c²]")
-                        ax.set_ylabel("Counts")
-                        ax.set_title(f"{particle} Mass Peak with Signal/Background Regions")
-                        ax.legend()
-                        ax.grid(True, alpha=0.3)
-                        st.pyplot(fig)
-                        
-                        # Classification metrics
-                        n_signal = np.sum(sig_mask)
-                        n_bkg = len(m_inv_clean) - n_signal
-                        
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Signal Events", f"{n_signal:,}")
-                        with col2:
-                            st.metric("Background Events", f"{n_bkg:,}")
-                        with col3:
-                            st.metric("Signal Fraction", f"{100*n_signal/len(m_inv_clean):.1f}%")
+                    st.markdown(f"""
+                    ### Peak Statistics
+                    - **Peak Mass:** {peak_mass:.2f} MeV/c²
+                    - **Sigma:** {sigma:.2f} MeV/c²
+                    - **Signal Range:** [{peak_mass - 2*sigma:.2f}, {peak_mass + 2*sigma:.2f}] MeV/c²
+                    - **Background Range:** [{peak_mass - 5*sigma:.2f}, {peak_mass + 5*sigma:.2f}] MeV/c²
+                    """)
+                    
+                    # Visualization
+                    fig, ax = plt.subplots(figsize=(12, 5))
+                    ax.hist(m_inv_clean, bins=100, alpha=0.6, color='gray', label='All Events')
+                    
+                    sig_mask = (m_inv_clean > peak_mass - 2*sigma) & (m_inv_clean < peak_mass + 2*sigma)
+                    ax.hist(m_inv_clean[sig_mask], bins=50, alpha=0.8, color='green', label='Signal Region (±2σ)')
+                    
+                    ax.axvline(peak_mass, color='red', linestyle='--', linewidth=2, label='Peak')
+                    ax.axvline(peak_mass - 2*sigma, color='blue', linestyle=':', linewidth=1.5, alpha=0.7)
+                    ax.axvline(peak_mass + 2*sigma, color='blue', linestyle=':', linewidth=1.5, alpha=0.7)
+                    ax.axvline(peak_mass - 5*sigma, color='orange', linestyle=':', linewidth=1.5, alpha=0.7)
+                    ax.axvline(peak_mass + 5*sigma, color='orange', linestyle=':', linewidth=1.5, alpha=0.7)
+                    
+                    ax.set_xlabel("Invariant Mass [MeV/c²]")
+                    ax.set_ylabel("Counts")
+                    ax.set_title(f"{particle} Mass Peak with Signal/Background Regions")
+                    ax.legend()
+                    ax.grid(True, alpha=0.3)
+                    st.pyplot(fig)
+                    
+                    # Classification metrics
+                    n_signal = np.sum(sig_mask)
+                    n_bkg = len(m_inv_clean) - n_signal
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Signal Events", f"{n_signal:,}")
+                    with col2:
+                        st.metric("Background Events", f"{n_bkg:,}")
+                    with col3:
+                        st.metric("Signal Fraction", f"{100*n_signal/len(m_inv_clean):.1f}%")
 
 # =====================================================================
 # PAGE: PHYSICS INSIGHTS
@@ -581,96 +697,90 @@ elif nav_option == "🎯 Event Classification":
 elif nav_option == "📈 Physics Insights":
     st.title("📈 Physics Analysis & Insights")
     
-    if uploaded_file is None:
-        st.warning("Please upload a Parquet file in the sidebar.")
+    df = load_parquet_data_from_source(uploaded_file, file_source_path)
+    if df is None:
+        st.warning("Please provide a Parquet data source in the sidebar.")
     else:
-        temp_path = f"/tmp/{uploaded_file.name}"
-        with open(temp_path, 'wb') as f:
-            f.write(uploaded_file.getbuffer())
+        st.subheader("Decay Channel: B± → J/ψ(→ μ⁺μ⁻)K±")
         
-        df = load_parquet_data(temp_path)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+            ### Physics Context
+            **B Meson (B±)**
+            - Contains bottom quark (b)
+            - Essential for CP-violation studies
+            - Rare decay → precision probe
+            
+            **J/ψ Meson**
+            - Charmonium state (cc̄)
+            - Decays to μ⁺μ⁻ (clean signature)
+            - Sharp mass peak at 3.1 GeV/c²
+            """)
         
-        if df is not None:
-            st.subheader("Decay Channel: B± → J/ψ(→ μ⁺μ⁻)K±")
+        with col2:
+            st.markdown("""
+            ### Key Observables
+            **Invariant Mass**
+            - B meson peak ≈ 5.28 GeV/c²
+            - Mass reconstruction from 4-vectors
+            - Signal/background separation
             
-            col1, col2 = st.columns(2)
-            with col1:
-                st.markdown("""
-                ### Physics Context
-                **B Meson (B±)**
-                - Contains bottom quark (b)
-                - Essential for CP-violation studies
-                - Rare decay → precision probe
+            **Kinematics**
+            - pT: perpendicular to beam
+            - η: pseudorapidity (detector coords)
+            - Angular correlations (ΔR)
+            """)
+        
+        st.divider()
+        
+        # Data-driven insights
+        st.subheader("Data-Driven Analysis")
+        
+        prefixes = discover_particle_prefixes(df)
+        
+        if len(prefixes) > 0:
+            # Create multi-column correlation
+            st.markdown("### Multi-Particle Kinematics")
+            
+            selected_particles = st.multiselect(
+                "Select particles to correlate:",
+                prefixes,
+                default=prefixes[:2] if len(prefixes) >= 2 else prefixes
+            )
+            
+            if len(selected_particles) >= 2:
+                # Calculate multiple features for selected particles
+                features_dict = {}
                 
-                **J/ψ Meson**
-                - Charmonium state (cc̄)
-                - Decays to μ⁺μ⁻ (clean signature)
-                - Sharp mass peak at 3.1 GeV/c²
-                """)
-            
-            with col2:
-                st.markdown("""
-                ### Key Observables
-                **Invariant Mass**
-                - B meson peak ≈ 5.28 GeV/c²
-                - Mass reconstruction from 4-vectors
-                - Signal/background separation
-                
-                **Kinematics**
-                - pT: perpendicular to beam
-                - η: pseudorapidity (detector coords)
-                - Angular correlations (ΔR)
-                """)
-            
-            st.divider()
-            
-            # Data-driven insights
-            st.subheader("Data-Driven Analysis")
-            
-            prefixes = discover_particle_prefixes(df)
-            
-            if len(prefixes) > 0:
-                # Create multi-column correlation
-                st.markdown("### Multi-Particle Kinematics")
-                
-                selected_particles = st.multiselect(
-                    "Select particles to correlate:",
-                    prefixes,
-                    default=prefixes[:2] if len(prefixes) >= 2 else prefixes
-                )
-                
-                if len(selected_particles) >= 2:
-                    # Calculate multiple features for selected particles
-                    features_dict = {}
+                for particle in selected_particles:
+                    eta = calculate_pseudorapidity(df, particle)
+                    pt = calculate_transverse_momentum(df, particle)
+                    m_inv = calculate_invariant_mass(df, particle)
                     
-                    for particle in selected_particles:
-                        eta = calculate_pseudorapidity(df, particle)
-                        pt = calculate_transverse_momentum(df, particle)
-                        m_inv = calculate_invariant_mass(df, particle)
-                        
-                        if eta is not None:
-                            features_dict[f'{particle}_eta'] = eta[~np.isnan(eta)]
-                        if pt is not None:
-                            features_dict[f'{particle}_pt'] = pt[~np.isnan(pt)]
-                        if m_inv is not None:
-                            features_dict[f'{particle}_m_inv'] = m_inv[~np.isnan(m_inv)]
+                    if eta is not None:
+                        features_dict[f'{particle}_eta'] = eta[~np.isnan(eta)]
+                    if pt is not None:
+                        features_dict[f'{particle}_pt'] = pt[~np.isnan(pt)]
+                    if m_inv is not None:
+                        features_dict[f'{particle}_m_inv'] = m_inv[~np.isnan(m_inv)]
+                
+                if len(features_dict) > 0:
+                    # Display statistics
+                    st.markdown("#### Kinematic Summary")
+                    summary_data = []
+                    for key, values in features_dict.items():
+                        summary_data.append({
+                            "Feature": key,
+                            "Mean": np.mean(values),
+                            "Std": np.std(values),
+                            "Min": np.min(values),
+                            "Max": np.max(values),
+                            "Median": np.median(values)
+                        })
                     
-                    if len(features_dict) > 0:
-                        # Display statistics
-                        st.markdown("#### Kinematic Summary")
-                        summary_data = []
-                        for key, values in features_dict.items():
-                            summary_data.append({
-                                "Feature": key,
-                                "Mean": np.mean(values),
-                                "Std": np.std(values),
-                                "Min": np.min(values),
-                                "Max": np.max(values),
-                                "Median": np.median(values)
-                            })
-                        
-                        summary_df = pd.DataFrame(summary_data)
-                        st.dataframe(summary_df, use_container_width=True)
+                    summary_df = pd.DataFrame(summary_data)
+                    st.dataframe(summary_df, use_container_width=True)
 
 # =====================================================================
 # PAGE: PIPELINE STATUS
