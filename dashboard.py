@@ -101,32 +101,26 @@ def load_parquet_data(file_path):
         st.error(f"Error loading file: {e}")
         return None
 
-@st.cache_data
-def load_parquet_data_from_source(uploaded_file, source_path):
-    """Load parquet data from multiple supported sources.
-
-    Priority:
-    1) Browser-uploaded file (small)
-    2) Local file path (when running locally)
-    3) HTTP(S) URL (tries DuckDB direct read first, then streams to disk)
-    4) s3:// (tries DuckDB, then s3fs + pyarrow)
-    5) gs:// (tries DuckDB, then gcsfs + pyarrow)
-    """
-    con = get_db_connection()
-
-    # 1) Browser-uploaded file (small)
-    if uploaded_file is not None:
-        tmp = f"/tmp/{uploaded_file.name}"
-        try:
-            with open(tmp, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            return con.execute(f"SELECT * FROM read_parquet('{tmp}')").df()
-        except Exception as e:
-            st.error(f"Failed reading uploaded parquet: {e}")
-            return None
-
+@st.cache_data(ttl=3600, show_spinner="Loading data...")
+def load_parquet_data_from_source(source_path):
     if not source_path:
-        st.warning("No data source provided.")
+        st.error("No data source provided.")
+        return None
+
+    try:
+        # Try direct remote read with DuckDB (best for Parquet on HF)
+        con = duckdb.connect(database=":memory:")
+        # Enable httpfs for remote files
+        con.execute("INSTALL httpfs; LOAD httpfs;")
+        
+        query = f"""
+        SELECT * FROM read_parquet('{source_path}')
+        """
+        df = con.execute(query).df()
+        return df
+    except Exception as e:
+        st.error(f"Failed to load data: {e}")
+        st.info("Tip: For very large files, consider sampling or using column projections.")
         return None
 
     parsed = urlparse(source_path)
