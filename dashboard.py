@@ -52,32 +52,27 @@ st.markdown("""
 # =====================================================================
 st.sidebar.markdown("## 📁 Data & Navigation")
 
-data_source = st.sidebar.selectbox(
-    "Data source",
-    ["Upload (small file)", "Local file path (when running locally)", "S3 / GCS / HTTP URL"]
+# The dashboard now relies on a remote Parquet file by default. For your dataset
+# we point to the Hugging Face "resolve" URL you provided. This avoids browser
+# uploads for very large files.
+
+DEFAULT_PARQUET_URL = (
+    "https://huggingface.co/datasets/nicolasxc2089/Bmesondecayparquet/"
+    "resolve/main/2017_Magnetic_Down_Photon-Photon.root.parquet"
 )
 
-uploaded_file = None
-file_source_path = None
+file_source_path = st.sidebar.text_input(
+    "Parquet URL",
+    value=DEFAULT_PARQUET_URL,
+    help=("Remote Parquet URL to load. The dashboard will try DuckDB's direct "
+          "remote read first (if the host supports range requests). If that fails "
+          "the file will be streamed to disk, which requires enough local disk space)."),
+)
 
-if data_source == "Upload (small file)":
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload Parquet file (small)",
-        type="parquet",
-        help="Use only for small demo files. Large files should be hosted externally."
-    )
-elif data_source == "Local file path (when running locally)":
-    file_source_path = st.sidebar.text_input(
-        "Local path to Parquet file",
-        placeholder="/path/to/file.parquet",
-        help="When running streamlit locally you can point to a local parquet file (no upload required)."
-    )
-else:
-    file_source_path = st.sidebar.text_input(
-        "Enter S3 / GCS / HTTP(s) URL",
-        placeholder="s3://my-bucket/data/file.parquet or https://huggingface.co/.../resolve/main/file.parquet",
-        help="For s3:// or gs:// you need credentials available in environment or config. For Hugging Face use the 'resolve' URL (replace /blob/ with /resolve/)."
-    )
+st.sidebar.caption("If you need a local path instead, replace the URL with a local file path when running locally.")
+
+# We remove browser upload to simplify operation with large files.
+uploaded_file = None
 
 # Navigation tabs
 nav_option = st.sidebar.radio(
