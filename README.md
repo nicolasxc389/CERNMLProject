@@ -18,17 +18,17 @@ Real CERN B Physics dataset from CERN OpenData (2017 magnet up/down ntuples).
 
 ## Pipeline
 
-parquet.py → momentum.py → pseudorapidity.py → invariantmass.py → boostedtree+neural.py, Xgboostregressor.py → angularSeparation.py
+parquet.py → momentum.py → pseudorapidity.py → invariantmass.py → angularSeparation.py  → boostedtree+neural.py, Xgboostregressor.py 
 
-| Module | Purpose | Status |
+| Module | Purpose |
 |--------|---------|--------|
-| `parquet.py` | Convert ROOT files to Parquet | ✅ |
-| `momentum.py` | Momentum distributions | ✅ |
-| `pseudorapidity.py` | η, φ, pT features | ✅ |
-| `invariantmass.py` | 4-vector mass reconstruction | ✅ |
-| `boostedtree.py` | Gradient boosting classifier | ✅ |
-| `angularSeparation.py` | Angular analysis | ✅ |
-| `resolutionSharpening.py` | Resolution regressor | 🔨 In Progress |
+| `parquet.py` | Convert ROOT files to Parquet |
+| `momentum.py` | Momentum distributions |
+| `pseudorapidity.py` | η, φ, pT features |
+| `invariantmass.py` | 4-vector mass reconstruction | 
+| `boostedtree+neural.py` | Boosted decision tree + deep neural network | 
+| `angularSeparation.py` | Angular analysis | 
+| `xgboostregressor.py` | regressor | 
 
 ---
 
@@ -37,20 +37,6 @@ parquet.py → momentum.py → pseudorapidity.py → invariantmass.py → booste
 pandas, uproot, duckdb, numpy, matplotlib, scikit-learn, xgboost
 
 Install: `pip install -r requirements.txt`
-
----
-
-## Quick Start
-
-```bash
-python parquet.py
-python momentum.py
-python pseudorapidity.py
-python invariantmass.py
-python boostedtree.py
-python angularSeparation.py
-# resolutionSharpening.py is optional / in progress
-```
 
 ---
 
