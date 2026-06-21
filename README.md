@@ -18,7 +18,7 @@ Real CERN B Physics dataset from CERN OpenData (2017 magnet up/down ntuples).
 
 ## Pipeline
 
-parquet.py → momentum.py → pseudorapidity.py → invariantmass.py → boostedtree.py → angularSeparation.py
+parquet.py → momentum.py → pseudorapidity.py → invariantmass.py → boostedtree+neural.py, Xgboostregressor.py → angularSeparation.py
 
 | Module | Purpose | Status |
 |--------|---------|--------|
