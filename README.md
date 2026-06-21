@@ -21,7 +21,7 @@ Real CERN B Physics dataset from CERN OpenData (2017 magnet up/down ntuples).
 parquet.py → momentum.py → pseudorapidity.py → invariantmass.py → angularSeparation.py  → boostedtree+neural.py, Xgboostregressor.py 
 
 | Module | Purpose |
-|--------|---------|--------|
+|--------|---------|
 | `parquet.py` | Convert ROOT files to Parquet |
 | `momentum.py` | Momentum distributions |
 | `pseudorapidity.py` | η, φ, pT features |
@@ -40,11 +40,9 @@ Install: `pip install -r requirements.txt`
 
 ---
 
-## Physics Context
+## Analysis
 
-- Decay: B± → J/ψ(→ μ⁺μ⁻)K± — signal peak near ~5.28 GeV
-- Key observables: transverse momentum (pT), pseudorapidity (η), invariant mass
-
+The analysis demonstrates a strong separation between signal and background events using engineered kinematic features from CERN OpenData B-meson decay samples. Classical ML models such as XGBoost and decision trees were able to exploit this separability effectively, suggesting that feature engineering plays a dominant role in classification performance for this dataset.
 ---
 
 ## Notes
